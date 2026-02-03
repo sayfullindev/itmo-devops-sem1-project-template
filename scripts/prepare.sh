@@ -37,31 +37,6 @@ done
 
 echo "➤ setting up database..."
 
-sudo -u postgres psql <<'SQL'
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_roles
-        WHERE rolname = 'validator'
-    ) THEN
-        CREATE ROLE validator
-            LOGIN
-            PASSWORD 'val1dat0r';
-    END IF;
-END
-$$
-SQL
-
-sudo -u postgres psql -c "SELECT 1 FROM pg_database WHERE datname = 'project-sem-1'" | grep -q 1
-
-if [ $? -ne 0 ]; then
-    sudo -u postgres psql -c "CREATE DATABASE \"project-sem-1\" OWNER validator;"
-fi
-
-
-sudo -u postgres psql -c 'ALTER DATABASE "project-sem-1" OWNER TO validator;'
-
 PGPASSWORD=val1dat0r psql -h localhost -U validator -d project-sem-1 <<'SQL'
 CREATE TABLE IF NOT EXISTS prices(
     id INTEGER PRIMARY KEY,
