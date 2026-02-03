@@ -10,4 +10,4 @@ fi
 
 # step 2: starting server
 echo "starting server on port :8080"
-./server
+./server &
