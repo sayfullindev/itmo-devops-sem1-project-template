@@ -102,21 +102,44 @@ func handlePostPrices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	tx, err := db.Begin()
+	if err != nil {
+		http.Error(w, "Failed to post data", http.StatusInternalServerError)
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec(`
+		CREATE TEMP TABLE temp_upload (
+			id SERIAL PRIMARY KEY,
+			name VARCHAR(255),
+			category VARCHAR(100),
+			price NUMERIC(10,2),
+			create_date VARCHAR(50)
+		) ON COMMIT DROP
+	`)
+
+	if err != nil {
+		http.Error(w, "Failed to create temp table", http.StatusInternalServerError)
+		return
+	}
+
 	for _, record := range records[1:] {
 		if len(record) != 5 {
 			continue
 		}
-		id, _ := strconv.Atoi(strings.TrimSpace(record[0]))
+
 		name := strings.TrimSpace(record[1])
 		category := strings.TrimSpace(record[2])
 		price, _ := strconv.ParseFloat(strings.TrimSpace(record[3]), 64)
 		createDate := strings.TrimSpace(record[4])
 
-		sql := "INSERT INTO prices (id, name, category, price, create_date) VALUES ($1, $2, $3, $4, $5)"
-		_, err = db.Exec(sql, id, name, category, price, createDate)
+		sql := "INSERT INTO temp_upload (name, category, price, create_date) VALUES ($1, $2, $3, $4)"
+		_, err = tx.Exec(sql, name, category, price, createDate)
 
 		if err != nil {
 			log.Printf("Failed to insert record: %v", err)
+			http.Error(w, "Failed to post data", http.StatusInternalServerError)
+			return
 		}
 	}
 
@@ -124,15 +147,39 @@ func handlePostPrices(w http.ResponseWriter, r *http.Request) {
 	var totalCategories int
 	var totalPrice float64
 
-	db.QueryRow("SELECT COUNT(*) FROM prices ").Scan(&totalItems)
-	db.QueryRow("SELECT COUNT(DISTINCT category) FROM prices ").Scan(&totalCategories)
-	db.QueryRow("SELECT SUM(price) FROM prices ").Scan(&totalPrice)
+	err = tx.QueryRow(`
+		SELECT 
+			COUNT(*), 
+			COUNT(DISTINCT category),
+			SUM(price)
+		FROM temp_upload
+		`).Scan(&totalItems, &totalCategories, &totalPrice)
+
+	if err != nil {
+		log.Printf("Failed to count statistics: %v", err)
+		http.Error(w, "Failed to load statistics", http.StatusInternalServerError)
+		return
+	}
 
 	response := PostResponse{
 		TotalItems:      totalItems,
 		TotalCategories: totalCategories,
 		TotalPrice:      totalPrice,
 	}
+
+	_, err = tx.Exec(`INSERT INTO prices SELECT * FROM temp_upload`)
+	if err != nil {
+		log.Printf("Failed to insert into main table: %v", err)
+		http.Error(w, "Failed to save data", http.StatusInternalServerError)
+		return
+	}
+
+	if err = tx.Commit(); err != nil {
+		log.Printf("Failed to commit: %v", err)
+		http.Error(w, "Failed to commit", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 
@@ -159,6 +206,12 @@ func handleGetPrices(w http.ResponseWriter, r *http.Request) {
 		}
 		products = append(products, p)
 	}
+	if err = rows.Err(); err != nil {
+		log.Printf("Error in row iteration: %v", err)
+		http.Error(w, "Failed to read all data", http.StatusInternalServerError)
+		return
+	}
+
 	var csvBuffer bytes.Buffer
 	csvWriter := csv.NewWriter(&csvBuffer)
 
@@ -191,14 +244,20 @@ func handleGetPrices(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-type", "application/zip")
 	w.Header().Set("Content-Disposition", "attachment; filename=data.zip")
-	w.Write(zipBuffer.Bytes())
+	_, err = w.Write(zipBuffer.Bytes())
+
+	if err != nil {
+		http.Error(w, "Failed to write response", http.StatusInternalServerError)
+		return
+	}
 
 }
 
 func main() {
 	err := initDB()
 	if err != nil {
-		log.Fatalf("Failed to connect to database: %v", err)
+		log.Printf("Failed to connect to database: %v", err)
+		return
 	}
 	defer db.Close()
 	log.Printf("Sucess connection to database")
@@ -211,6 +270,7 @@ func main() {
 
 	err = http.ListenAndServe(":8080", r)
 	if err != nil {
-		log.Fatalf("Failed to start server: %v", err)
+		log.Printf("Failed to start server: %v", err)
+		return
 	}
 }

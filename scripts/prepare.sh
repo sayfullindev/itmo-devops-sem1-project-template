@@ -39,14 +39,12 @@ echo "➤ setting up database..."
 
 PGPASSWORD=val1dat0r psql -h localhost -U validator -d project-sem-1 <<'SQL'
 CREATE TABLE IF NOT EXISTS prices(
-    id INTEGER PRIMARY KEY,
+    id SERIAL PRIMARY KEY,
     name VARCHAR(255),
     category VARCHAR(100),
     price NUMERIC(10,2),
     create_date VARCHAR(50)
 );
-
-TRUNCATE TABLE prices;
 SQL
 
 echo "✔ database is ready"
